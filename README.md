@@ -10,20 +10,20 @@ class Qnet(nn.Module):
     def __init__(self):
         super(Qnet, self).__init__()
         self.fcis = nn.Linear(4, 128) # fully connected input state
-        self.fcof = nn.Linear(128, 4*2) # fully connected output futures
-        self.fcif = nn.Linear(4*2, 128) # fully connected input futures
-        self.fcoa = nn.Linear(128, 2) # fully connected output actions
+        self.fcof = nn.Linear(128, 4*7) # fully connected output futures
+        self.fcif = nn.Linear(4*7, 128) # fully connected input futures
+        self.fcoa = nn.Linear(128, 7) # fully connected output actions
 
-    def future(self, s):
+    def future(self, s): # (240, 256, 3)
         if len(s.shape)==1:
             s = s.unsqueeze(0)
         x = F.relu(self.fcis(s))
         x = self.fcof(x)
-        x = x.reshape(x.shape[0], 2, 4)
+        x = x.reshape(x.shape[0], 7, 4)
         return x
 
     def forward(self, f):
-        f = f.reshape(f.shape[0], 8)
+        f = f.reshape(f.shape[0], 28)
         x = F.relu(self.fcif(f))
         x = self.fcoa(x)
         return x
