@@ -4,6 +4,11 @@ A neural network with an internal dynamics predictor. The agent first predicts a
 
 ![output](https://github.com/user-attachments/assets/945f014b-880a-4f3f-be6b-368d77b8da3a)
 
+Curiosity spikes during movement:
+
+![mario_graph](https://github.com/user-attachments/assets/b3eaf828-4a04-4047-92ef-fa656602e2f0)
+
+
 
 ```py
 class Qnet(nn.Module):
