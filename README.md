@@ -1,6 +1,6 @@
 # Internal Dynamics
 
-A neural network with an internal dynamics predictor that robustly beats cartpole without epsilon-greedy. The agent first predicts all possible 1-step ahead futures based on all possible actions, then makes a decision based on these futures. The futures network is also trained for consistency with the actual future. The future network loss is added to the reward (curiosity).
+A neural network with an internal dynamics predictor that robustly beats cartpole without epsilon-greedy. The agent first predicts all possible 1-step ahead futures based on all possible actions, then makes a decision based on these futures. The futures network is also trained for consistency with the actual future. The future network loss is added to the reward (curiosity). Baseline DQN code is from https://raw.githubusercontent.com/seungeunrho/minimalRL/refs/heads/master/dqn.py.
 
 ```py
 class Qnet(nn.Module):
