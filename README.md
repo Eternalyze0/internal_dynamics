@@ -6,10 +6,10 @@ A neural network with an internal dynamics predictor that robustly beats cartpol
 class Qnet(nn.Module):
     def __init__(self):
         super(Qnet, self).__init__()
-        self.fcis = nn.Linear(4, 128)
-        self.fcof = nn.Linear(128, 4*2)
-        self.fcif = nn.Linear(4*2, 128)
-        self.fcoa = nn.Linear(128, 2)
+        self.fcis = nn.Linear(4, 128) # fully connected input state
+        self.fcof = nn.Linear(128, 4*2) # fully connected output futures
+        self.fcif = nn.Linear(4*2, 128) # fully connected input futures
+        self.fcoa = nn.Linear(128, 2) # fully connected output actions
 
     def future(self, s):
         if len(s.shape)==1:
