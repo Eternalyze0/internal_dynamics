@@ -83,18 +83,76 @@ class Map(nn.Module):
         return x
 
 class Organism(nn.Module):
+    # def __init__(self):
+    #     super(Organism, self).__init__()
+    #     self.fcif = nn.Linear(4*7, 128) # fully connected input futures
+    #     self.fcoa = nn.Linear(128, 7) # fully connected output actions
+    #     self.fitness = None
+    #     self.n_f = 0
+    #     self.time_of_origin = time.time()
+
     def __init__(self):
         super(Organism, self).__init__()
-        self.fcif = nn.Linear(4*7, 128) # fully connected input futures
-        self.fcoa = nn.Linear(128, 7) # fully connected output actions
+
         self.fitness = None
         self.n_f = 0
         self.time_of_origin = time.time()
-    def forward(self, f):
-        f = f.reshape(f.shape[0], 28)
-        x = F.relu(self.fcif(f))
-        x = self.fcoa(x)
-        return x
+
+        # assert config.n_embd % config.n_head == 0
+        # key, query, value projections for all heads, but in a batch
+        self.n_embd = 7
+        self.bias = True
+        self.flash = True
+        self.n_head = 7
+        self.dropout = 0.1
+
+        self.c_attn = nn.Linear(self.n_embd, 3 * self.n_embd, bias=self.bias)
+        # output projection
+        self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=self.bias)
+        # regularization
+        self.attn_dropout = nn.Dropout(self.dropout)
+        self.resid_dropout = nn.Dropout(self.dropout)
+        self.n_head = self.n_head
+        self.n_embd = self.n_embd
+        self.dropout = self.dropout
+
+    # def forward(self, f):
+    #     f = f.reshape(f.shape[0], 28)
+    #     x = F.relu(self.fcif(f))
+    #     x = self.fcoa(x)
+    #     return x
+
+    def forward(self, x): # torch.Size([1, 7, 4])
+
+        x = x.permute(0, 2, 1)
+
+        B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+
+        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        if self.flash:
+            # efficient attention using Flash Attention CUDA kernels
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=False)
+        else:
+            # manual implementation of attention
+            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+            att = F.softmax(att, dim=-1)
+            att = self.attn_dropout(att)
+            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+
+        # output projection
+        y = self.resid_dropout(self.c_proj(y))
+        # print(y.shape) # torch.Size([1, 4, 7])
+        y = y.mean(dim=1)
+        # print(y.shape) # torch.Size([1, 7])
+        return y
 
 class Qnet(nn.Module):
     def __init__(self, n_pop=10):
@@ -107,10 +165,10 @@ class Qnet(nn.Module):
         self.n_pop = n_pop
         self.evolution_stage = 0
 
-        self.rif = nn.Linear(4*7, 128)
-        self.rooi = nn.Linear(128, self.n_pop)
-        self.rbrain = nn.Linear(128, 128)
-        self.rdo = nn.Dropout(0.5)
+        # self.rif = nn.Linear(4*7, 128)
+        # self.rooi = nn.Linear(128, self.n_pop)
+        # self.rbrain = nn.Linear(128, 128)
+        # self.rdo = nn.Dropout(0.5)
 
     def future(self, s): # (240, 256, 3)
         if len(s.shape)==1:
@@ -124,13 +182,13 @@ class Qnet(nn.Module):
         x = self.population[orsm_idx](f)
         return x
 
-    def route(self, f):
-        f = f.reshape(f.shape[0], 28)
-        x = F.relu(self.rif(f))
-        x = F.relu(self.rbrain(x))
-        x = self.rdo(x)
-        x = self.rooi(x)
-        return x
+    # def route(self, f):
+    #     f = f.reshape(f.shape[0], 28)
+    #     x = F.relu(self.rif(f))
+    #     x = F.relu(self.rbrain(x))
+    #     x = self.rdo(x)
+    #     x = self.rooi(x)
+    #     return x
 
     def evolve(self, curiosity):
         def mix_parameters(parent1, parent2):
@@ -290,13 +348,14 @@ def train_all(q, q_target, memory, optimizer, m, n_pop, curiosity):
             # loss.backward(retain_graph=True)
         loss.backward()
         optimizer.step()
-        q.evolve(curiosity) # UNCOMMENT FOR EVOLUTION
+        # q.evolve(curiosity)
+        # print(q..weight.grad)
         # for i, organism in enumerate(q.population):
         #     print(chr(97+i) + '.', round(time.time() - organism.time_of_origin), end=' ')
         # print()
 
 def main():
-    n_pop=1000
+    n_pop=1
     m = Map()
     q = Qnet(n_pop=n_pop)
     if len(sys.argv)>1 and 'new' in sys.argv[1]:
@@ -322,10 +381,12 @@ def main():
             ms = m(torch.from_numpy(s.copy()).float()).unsqueeze(0)
             del s
             f = q.future(ms)
-            # orsm_idx = random.randint(0, n_pop-1)
-            orsm_idx = q.route(f).argmax()
-            print('route', orsm_idx.item())
-            a = q.sample_action(f, epsilon, orsm_idx)  
+            orsm_idx = random.randint(0, n_pop-1)
+            # orsm_idx = q.route(f).argmax()
+            # print('route', orsm_idx.item())
+            # a = q.sample_action(f, epsilon, orsm_idx)
+            a = q(f, orsm_idx).argmax().item()
+            # print(a.shape)  
             env.render()
             s_prime, r, done, info = env.step(a)
             ms_prime = m(torch.tensor(s_prime.copy(), dtype=torch.float)) #.unsqueeze(0)
