@@ -82,50 +82,23 @@ class Map(nn.Module):
         x = self.fc(x)
         return x
 
-class Organism(nn.Module):
-    # def __init__(self):
-    #     super(Organism, self).__init__()
-    #     self.fcif = nn.Linear(4*7, 128) # fully connected input futures
-    #     self.fcoa = nn.Linear(128, 7) # fully connected output actions
-    #     self.fitness = None
-    #     self.n_f = 0
-    #     self.time_of_origin = time.time()
-
-    def __init__(self):
-        super(Organism, self).__init__()
-
-        self.fitness = None
-        self.n_f = 0
-        self.time_of_origin = time.time()
-
-        # assert config.n_embd % config.n_head == 0
-        # key, query, value projections for all heads, but in a batch
-        self.n_embd = 7
+class Attention(nn.Module):
+    def __init__(self, n_embd=7):
+        super(Attention, self).__init__()
+        self.n_embd = n_embd
         self.bias = True
         self.flash = True
-        self.n_head = 7
+        self.n_head = n_embd
         self.dropout = 0.1
-
         self.c_attn = nn.Linear(self.n_embd, 3 * self.n_embd, bias=self.bias)
-        # output projection
         self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=self.bias)
-        # regularization
         self.attn_dropout = nn.Dropout(self.dropout)
         self.resid_dropout = nn.Dropout(self.dropout)
         self.n_head = self.n_head
         self.n_embd = self.n_embd
-        self.dropout = self.dropout
+        self.dropout = self.dropout  
 
-    # def forward(self, f):
-    #     f = f.reshape(f.shape[0], 28)
-    #     x = F.relu(self.fcif(f))
-    #     x = self.fcoa(x)
-    #     return x
-
-    def forward(self, x): # torch.Size([1, 7, 4])
-
-        x = x.permute(0, 2, 1)
-
+    def forward(self, x):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
@@ -149,10 +122,152 @@ class Organism(nn.Module):
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))
-        # print(y.shape) # torch.Size([1, 4, 7])
-        y = y.mean(dim=1)
-        # print(y.shape) # torch.Size([1, 7])
-        return y
+        return y  
+
+class MLP(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+        self.n_embd = 7
+        self.bias = True
+        self.c_fc    = nn.Linear(self.n_embd, 4 * self.n_embd, bias=self.bias)
+        self.gelu    = nn.GELU()
+        self.c_proj  = nn.Linear(4 * self.n_embd, self.n_embd, bias=self.bias)
+        self.dropout = nn.Dropout(0.1)
+
+    def forward(self, x):
+        x = self.c_fc(x)
+        x = self.gelu(x)
+        x = self.c_proj(x)
+        x = self.dropout(x)
+        return x
+
+class LayerNorm(nn.Module):
+    """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
+
+    def __init__(self, ndim, bias):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(ndim))
+        self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
+
+    def forward(self, input):
+        return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
+
+class Block(nn.Module):
+
+    def __init__(self, n_embd=7):
+        super().__init__()
+        # self.n_embd = n_embd
+        self.bias = True
+        # self.ln_1 = LayerNorm(self.n_embd, bias=self.bias)
+        self.attn = Attention(n_embd=n_embd)
+        # self.ln_2 = LayerNorm(self.n_embd, bias=self.bias)
+        # self.mlp = MLP()
+
+    def forward(self, x):
+        # x = x + self.attn(self.ln_1(x))
+        # x = x + self.mlp(self.ln_2(x))
+        x = x + self.attn(x)
+        # x = x + self.mlp(x)
+        return x
+
+class Organism(nn.Module):
+    # def __init__(self):
+    #     super(Organism, self).__init__()
+    #     self.fcif = nn.Linear(4*7, 128) # fully connected input futures
+    #     self.fcoa = nn.Linear(128, 7) # fully connected output actions
+    #     self.fitness = None
+    #     self.n_f = 0
+    #     self.time_of_origin = time.time()
+
+    def __init__(self):
+        super(Organism, self).__init__()
+
+        self.fitness = None
+        self.n_f = 0
+        self.time_of_origin = time.time()
+        self.n_embd = 7
+        self.vocab_size = 7
+        self.bias = True
+        self.n_layer = 1
+
+        self.transformer = nn.ModuleDict(dict(
+            # wte = nn.Embedding(config.vocab_size, config.n_embd),
+            # wpe = nn.Embedding(config.block_size, config.n_embd),
+            # drop = nn.Dropout(config.dropout),
+            h = nn.ModuleList([Block() for _ in range(self.n_layer)]),
+            # ln_f = LayerNorm(self.n_embd, bias=self.bias),
+        ))
+        self.lm_head = nn.Linear(self.n_embd, self.vocab_size, bias=self.bias)
+
+    def forward(self, x):
+
+        x = x.permute(0, 2, 1)
+
+        for block in self.transformer.h:
+            x = block(x)
+        # x = self.transformer.ln_f(x)
+        # logits = self.lm_head(x.mean(dim=1))
+        # logits = self.lm_head(x[:,-1,:])
+        logits = x.mean(dim=1)
+        return logits
+        # assert config.n_embd % config.n_head == 0
+        # key, query, value projections for all heads, but in a batch
+        # self.n_embd = 7
+        # self.bias = True
+        # self.flash = True
+        # self.n_head = 7
+        # self.dropout = 0.1
+
+
+
+        # self.c_attn = nn.Linear(self.n_embd, 3 * self.n_embd, bias=self.bias)
+        # # output projection
+        # self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=self.bias)
+        # # regularization
+        # self.attn_dropout = nn.Dropout(self.dropout)
+        # self.resid_dropout = nn.Dropout(self.dropout)
+        # self.n_head = self.n_head
+        # self.n_embd = self.n_embd
+        # self.dropout = self.dropout
+
+    # def forward(self, f):
+    #     f = f.reshape(f.shape[0], 28)
+    #     x = F.relu(self.fcif(f))
+    #     x = self.fcoa(x)
+    #     return x
+
+    # def forward(self, x): # torch.Size([1, 7, 4])
+
+    #     x = x.permute(0, 2, 1)
+
+    #     B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+
+    #     # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+    #     q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
+    #     k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+    #     q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+    #     v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+    #     # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+    #     if self.flash:
+    #         # efficient attention using Flash Attention CUDA kernels
+    #         y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=False)
+    #     else:
+    #         # manual implementation of attention
+    #         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+    #         att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+    #         att = F.softmax(att, dim=-1)
+    #         att = self.attn_dropout(att)
+    #         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+    #     y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+
+    #     # output projection
+    #     y = self.resid_dropout(self.c_proj(y))
+    #     # print(y.shape) # torch.Size([1, 4, 7])
+    #     y = y.mean(dim=1)
+    #     # print(y.shape) # torch.Size([1, 7])
+    #     return y
 
 class Qnet(nn.Module):
     def __init__(self, n_pop=10):
@@ -165,10 +280,14 @@ class Qnet(nn.Module):
         self.n_pop = n_pop
         self.evolution_stage = 0
 
+        # self.action_expand = nn.Linear(4, 7*4)
+
         # self.rif = nn.Linear(4*7, 128)
         # self.rooi = nn.Linear(128, self.n_pop)
         # self.rbrain = nn.Linear(128, 128)
         # self.rdo = nn.Dropout(0.5)
+
+        # self.fblock = Block(n_embd=4)
 
     def future(self, s): # (240, 256, 3)
         if len(s.shape)==1:
@@ -177,6 +296,22 @@ class Qnet(nn.Module):
         x = self.fcof(x)
         x = x.reshape(x.shape[0], 7, 4)
         return x
+
+    # def future(self, s):
+    #     if len(s.shape)==1:
+    #         s = s.unsqueeze(0)
+    #     if len(s.shape)==4:
+    #         s = s.squeeze(1)
+    #     # print(s.shape)
+    #     # s = s.expand(s.shape[0], 7, s.shape[2])
+    #     s = s.flatten(start_dim=1)
+    #     s = self.action_expand(s)
+    #     # print(s.shape)
+    #     s = s.reshape(s.shape[0], 7, 4)
+    #     x = self.fblock(s)
+    #     # print(x.shape)
+    #     # exit()
+    #     return x
 
     def forward(self, f, orsm_idx=0):
         x = self.population[orsm_idx](f)
