@@ -3,6 +3,8 @@ import random
 import sys
 import matplotlib.pyplot as plt
 import numpy as np
+import math
+import time
 
 import torch
 import torch.nn as nn
@@ -17,14 +19,14 @@ from nes_py.wrappers import JoypadSpace
 import gym_super_mario_bros
 from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
 # env = gym_super_mario_bros.make('SuperMarioBros-v0')
-env = gym_super_mario_bros.make('SuperMarioBros-1-1-v0')
+env = gym_super_mario_bros.make('SuperMarioBros-1-2-v0')
 env = JoypadSpace(env, SIMPLE_MOVEMENT)
 
 #Hyperparameters
 learning_rate = 0.0005
 gamma         = 0.98
-buffer_limit  = 32
-batch_size    = 32
+buffer_limit  = int(1e4)
+batch_size    = 256
 plot = False
 
 class ReplayBuffer():
@@ -85,7 +87,9 @@ class Organism(nn.Module):
         super(Organism, self).__init__()
         self.fcif = nn.Linear(4*7, 128) # fully connected input futures
         self.fcoa = nn.Linear(128, 7) # fully connected output actions
-        self.fitness = 0.0
+        self.fitness = None
+        self.n_f = 0
+        self.time_of_origin = time.time()
     def forward(self, f):
         f = f.reshape(f.shape[0], 28)
         x = F.relu(self.fcif(f))
@@ -97,9 +101,16 @@ class Qnet(nn.Module):
         super(Qnet, self).__init__()
         self.fcis = nn.Linear(4, 128) # fully connected input state
         self.fcof = nn.Linear(128, 4*7) # fully connected output futures
-        self.population = []
-        for _ in range(n_pop):
-            self.population.append(Organism())
+        self.population = nn.ModuleList([Organism() for _ in range(n_pop)])
+        # for _ in range(n_pop):
+            # self.population.append(Organism())
+        self.n_pop = n_pop
+        self.evolution_stage = 0
+
+        self.rif = nn.Linear(4*7, 128)
+        self.rooi = nn.Linear(128, self.n_pop)
+        self.rbrain = nn.Linear(128, 128)
+        self.rdo = nn.Dropout(0.5)
 
     def future(self, s): # (240, 256, 3)
         if len(s.shape)==1:
@@ -113,7 +124,15 @@ class Qnet(nn.Module):
         x = self.population[orsm_idx](f)
         return x
 
-    def evolve(self):
+    def route(self, f):
+        f = f.reshape(f.shape[0], 28)
+        x = F.relu(self.rif(f))
+        x = F.relu(self.rbrain(x))
+        x = self.rdo(x)
+        x = self.rooi(x)
+        return x
+
+    def evolve(self, curiosity):
         def mix_parameters(parent1, parent2):
             offspring = Organism()
             
@@ -154,14 +173,66 @@ class Qnet(nn.Module):
             
             return offspring
 
-        first = second = None
-        for obj in self.population:
-            if first is None or obj.fitness > first.fitness:
-                second = first
-                first = obj
-            elif second is None or obj.fitness > second.fitness:
-                second = obj
-        self.population[np.argmin([x.fitness for x in self.population])] = mix_parameters(first, second)
+        worst_organism = None
+        worst_fitness = np.inf
+        worst_index = None
+        for i, organism in enumerate(self.population):
+            if organism.n_f > 1:
+                if organism.fitness < worst_fitness:
+                    worst_organism = organism
+                    worst_fitness = organism.fitness
+                    worst_index = i
+
+        best_organism = None
+        best_fitness = -np.inf
+        best_index = None
+        for i, organism in enumerate(self.population):
+            if organism.n_f > 1:
+                if organism.fitness > best_fitness:
+                    best_organism = organism
+                    best_fitness = organism.fitness
+                    best_index = i
+
+        if worst_organism and best_organism:
+            print('population event')
+            coin = random.random()
+            if coin < 1.0:
+                coin = random.random()
+                if coin > curiosity/worst_fitness and coin > 0.999:
+                    self.population[worst_index] = Organism()
+                else:
+                    self.population[worst_index] = best_organism
+
+        average_lifespan = 0.0
+        for organism in self.population:
+            average_lifespan += time.time() - organism.time_of_origin
+        average_lifespan /= len(self.population)
+
+        print('best_fitness', best_fitness)
+        print('worst_fitness', worst_fitness)
+        print('average_lifespan', average_lifespan)
+
+        # first = second = None
+        # for obj in self.population:
+        #     if first is None or (obj.fitness != None and obj.fitness > first.fitness):
+        #         second = first
+        #         first = obj
+        #     elif second is None or (obj.fitness != None and obj.fitness > second.fitness):
+        #         second = obj
+        # if self.evolution_stage % 10 == 0:
+        #     self.population[np.argmin([x.fitness for x in self.population])] = first
+        # if self.evolution_stage % 11 == 0:
+        #     self.population[np.argmin([x.fitness for x in self.population])] = Organism()
+            # mix_parameters(first, second)
+        # best = random.randint(0, self.n_pop-1)
+        # second_best = random.randint(0, self.n_pop-1)
+        # new_random = random.randint(0, self.n_pop-1)
+        # self.population[best] = first
+        # if second_best != best:
+        #     self.population[second_best] = second
+        # if new_random != best and new_random != second_best and self.evolution_stage % 1000 == 0:
+        #     self.population[new_random] = Organism()
+        self.evolution_stage += 1
 
       
     def sample_action(self, obs, epsilon, orsm_idx=0):
@@ -172,13 +243,15 @@ class Qnet(nn.Module):
         else : 
             return out.argmax().item()
             
-def train(q, q_target, memory, optimizer, m):
+def train(q, q_target, memory, optimizer, m, n_pop):
     for i in range(1):
         ms,a,r,ms_prime,done_mask = memory.sample(batch_size)
 
         q_out = q(q.future(ms), orsm_idx=random.randint(0, n_pop-1))
         q_a = q_out.gather(1,a)
         max_q_prime = q_target(q_target.future(ms_prime)).max(1)[0].unsqueeze(1)
+        # gamma = 0.98 + 0.01 * math.sin(time.time())
+        # print('gamma', gamma)
         target = r + gamma * max_q_prime * done_mask
         loss = F.smooth_l1_loss(q_a, target)
         
@@ -194,12 +267,36 @@ def train_future(q, memory, optimizer, m):
         loss = F.mse_loss(s_prime_prediction, ms_prime)
 
         optimizer.zero_grad()
-        with torch.autograd.set_detect_anomaly(True):
-            loss.backward()
+        loss.backward()
         optimizer.step()
 
+def train_all(q, q_target, memory, optimizer, m, n_pop, curiosity):
+    for i in range(1):
+        ms,a,r,ms_prime,done_mask = memory.sample(batch_size)
+
+        s_prime_prediction = q.future(ms.detach()).gather(1, a.unsqueeze(-1).expand(-1, -1, 4))
+
+        q_out = q(q.future(ms.detach()), orsm_idx=random.randint(0, n_pop-1))
+        q_a = q_out.gather(1,a)
+        max_q_prime = q_target(q_target.future(ms_prime.detach())).max(1)[0].unsqueeze(1)
+        # gamma = 0.98 + 0.01 * math.sin(time.time())
+        # print('gamma', gamma)
+        target = r + gamma * max_q_prime * done_mask
+        alpha = 100.0
+        loss = F.smooth_l1_loss(q_a, target) + alpha * F.mse_loss(s_prime_prediction, ms_prime.detach())
+        # print('loss', loss)
+        optimizer.zero_grad()
+        # with torch.autograd.set_detect_anomaly(True):
+            # loss.backward(retain_graph=True)
+        loss.backward()
+        optimizer.step()
+        q.evolve(curiosity) # UNCOMMENT FOR EVOLUTION
+        # for i, organism in enumerate(q.population):
+        #     print(chr(97+i) + '.', round(time.time() - organism.time_of_origin), end=' ')
+        # print()
+
 def main():
-    n_pop=10
+    n_pop=1000
     m = Map()
     q = Qnet(n_pop=n_pop)
     if len(sys.argv)>1 and 'new' in sys.argv[1]:
@@ -207,7 +304,7 @@ def main():
     else:
         m.load_state_dict(torch.load('mario_m.pth'))
         q.load_state_dict(torch.load('mario_q.pth'))
-    q_target = Qnet()
+    q_target = Qnet(n_pop=n_pop)
     q_target.load_state_dict(q.state_dict())
     memory = ReplayBuffer()
 
@@ -225,16 +322,24 @@ def main():
             ms = m(torch.from_numpy(s.copy()).float()).unsqueeze(0)
             del s
             f = q.future(ms)
-            orsm_idx = random.randint(0, n_pop-1)
+            # orsm_idx = random.randint(0, n_pop-1)
+            orsm_idx = q.route(f).argmax()
+            print('route', orsm_idx.item())
             a = q.sample_action(f, epsilon, orsm_idx)  
             env.render()
             s_prime, r, done, info = env.step(a)
-            ms_prime = m(torch.tensor(s_prime.copy(), dtype=torch.float)).unsqueeze(0)
+            ms_prime = m(torch.tensor(s_prime.copy(), dtype=torch.float)) #.unsqueeze(0)
             c = F.mse_loss(f.gather(1, torch.tensor([a], dtype=torch.long).view(1, 1).unsqueeze(-1).expand(-1, -1, 4)), 
-                ms_prime)
-            q.population[orsm_idx].fitness = c.item()
-            q.evolve()
-            print(c)
+                ms_prime.unsqueeze(0))
+            if q.population[orsm_idx].n_f == 0:
+                q.population[orsm_idx].fitness = c.item()
+                q.population[orsm_idx].n_f += 1
+            else:
+                q.population[orsm_idx].fitness = \
+                    (q.population[orsm_idx].fitness * q.population[orsm_idx].n_f + c.item()) / (q.population[orsm_idx].n_f+1)
+                q.population[orsm_idx].n_f += 1
+            # q.evolve()
+            # print('curiosity', c)
             r = c
             done_mask = 0.0 if done else 1.0
             # print(ms.shape, ms_prime.shape)
@@ -249,12 +354,16 @@ def main():
                 plt.ylim(0.0, 1000.0)
                 plt.plot(curiosities)
                 plt.savefig('mario_plot.png')
+
+            
+            if memory.size()>=batch_size:
+                # print('training..')
+                # train(q, q_target, memory, optimizer, m, n_pop)
+                # train_future(q, memory, optimizer, m)
+                train_all(q, q_target, memory, optimizer, m, n_pop, c.item())
+
             if done:
                 break
-            
-        if memory.size()>batch_size:
-            train(q, q_target, memory, optimizer, m)
-            train_future(q, memory, optimizer, m)
 
         if n_epi%print_interval==0 and n_epi!=0:
             torch.save(q.state_dict(), 'mario_q.pth')
