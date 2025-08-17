@@ -1,6 +1,8 @@
 import collections
 import random
 import sys
+import matplotlib.pyplot as plt
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -14,7 +16,8 @@ from itertools import chain
 from nes_py.wrappers import JoypadSpace
 import gym_super_mario_bros
 from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
-env = gym_super_mario_bros.make('SuperMarioBros-v0')
+# env = gym_super_mario_bros.make('SuperMarioBros-v0')
+env = gym_super_mario_bros.make('SuperMarioBros-1-1-v0')
 env = JoypadSpace(env, SIMPLE_MOVEMENT)
 
 #Hyperparameters
@@ -22,6 +25,7 @@ learning_rate = 0.0005
 gamma         = 0.98
 buffer_limit  = 32
 batch_size    = 32
+plot = False
 
 class ReplayBuffer():
     def __init__(self):
@@ -76,13 +80,26 @@ class Map(nn.Module):
         x = self.fc(x)
         return x
 
-class Qnet(nn.Module):
+class Organism(nn.Module):
     def __init__(self):
+        super(Organism, self).__init__()
+        self.fcif = nn.Linear(4*7, 128) # fully connected input futures
+        self.fcoa = nn.Linear(128, 7) # fully connected output actions
+        self.fitness = 0.0
+    def forward(self, f):
+        f = f.reshape(f.shape[0], 28)
+        x = F.relu(self.fcif(f))
+        x = self.fcoa(x)
+        return x
+
+class Qnet(nn.Module):
+    def __init__(self, n_pop=10):
         super(Qnet, self).__init__()
         self.fcis = nn.Linear(4, 128) # fully connected input state
         self.fcof = nn.Linear(128, 4*7) # fully connected output futures
-        self.fcif = nn.Linear(4*7, 128) # fully connected input futures
-        self.fcoa = nn.Linear(128, 7) # fully connected output actions
+        self.population = []
+        for _ in range(n_pop):
+            self.population.append(Organism())
 
     def future(self, s): # (240, 256, 3)
         if len(s.shape)==1:
@@ -92,14 +109,63 @@ class Qnet(nn.Module):
         x = x.reshape(x.shape[0], 7, 4)
         return x
 
-    def forward(self, f):
-        f = f.reshape(f.shape[0], 28)
-        x = F.relu(self.fcif(f))
-        x = self.fcoa(x)
+    def forward(self, f, orsm_idx=0):
+        x = self.population[orsm_idx](f)
         return x
+
+    def evolve(self):
+        def mix_parameters(parent1, parent2):
+            offspring = Organism()
+            
+            # Iterate through each parameter in the model
+            for (name1, param1), (name2, param2), offspring_param in zip(parent1.named_parameters(), 
+                                                                     parent2.named_parameters(), 
+                                                                     offspring.parameters()):
+                # Ensure we are mixing corresponding parameters
+                assert name1 == name2, "Parameter names do not match!"
+                
+                # Flatten the parameters to 1D for easier manipulation
+                param1_flat = param1.data.view(-1)
+                param2_flat = param2.data.view(-1)
+                offspring_param_flat = offspring_param.data.view(-1)
+                
+                # Determine the number of parameters to take from each parent and random init
+                total_params = param1_flat.size(0)
+                one_third = total_params // 3
+                
+                # Randomly permute the indices
+                indices = torch.randperm(total_params)
+                
+                # Assign 1/3 from parent1, 1/3 from parent2, and 1/3 random
+                offspring_param_flat[indices[:one_third]] = param1_flat[indices[:one_third]]
+                offspring_param_flat[indices[one_third:2*one_third]] = param2_flat[indices[one_third:2*one_third]]
+                
+                # Initialize the remaining 1/3 randomly
+                # remaining_indices = indices[2*one_third:]
+                # if len(remaining_indices) > 0:
+                #     # Use Xavier initialization for weights, zeros for biases
+                #     if 'weight' in name1:
+                #         nn.init.xavier_uniform_(offspring_param_flat[remaining_indices])
+                #     elif 'bias' in name1:
+                #         nn.init.zeros_(offspring_param_flat[remaining_indices])
+                
+                # Reshape back to original shape
+                offspring_param.data = offspring_param_flat.view(param1.data.shape)
+            
+            return offspring
+
+        first = second = None
+        for obj in self.population:
+            if first is None or obj.fitness > first.fitness:
+                second = first
+                first = obj
+            elif second is None or obj.fitness > second.fitness:
+                second = obj
+        self.population[np.argmin([x.fitness for x in self.population])] = mix_parameters(first, second)
+
       
-    def sample_action(self, obs, epsilon):
-        out = self.forward(obs)
+    def sample_action(self, obs, epsilon, orsm_idx=0):
+        out = self.forward(obs, orsm_idx)
         coin = random.random()
         if coin < epsilon:
             return random.randint(0,3)
@@ -110,7 +176,7 @@ def train(q, q_target, memory, optimizer, m):
     for i in range(1):
         ms,a,r,ms_prime,done_mask = memory.sample(batch_size)
 
-        q_out = q(q.future(ms))
+        q_out = q(q.future(ms), orsm_idx=random.randint(0, n_pop-1))
         q_a = q_out.gather(1,a)
         max_q_prime = q_target(q_target.future(ms_prime)).max(1)[0].unsqueeze(1)
         target = r + gamma * max_q_prime * done_mask
@@ -133,8 +199,9 @@ def train_future(q, memory, optimizer, m):
         optimizer.step()
 
 def main():
+    n_pop=10
     m = Map()
-    q = Qnet()
+    q = Qnet(n_pop=n_pop)
     if len(sys.argv)>1 and 'new' in sys.argv[1]:
         pass
     else:
@@ -152,25 +219,36 @@ def main():
         epsilon = max(0.01, 0.08 - 0.01*(n_epi/200)) #Linear annealing from 8% to 1%
         s = env.reset()
         done = False
+        curiosities = []
 
         while not done:
             ms = m(torch.from_numpy(s.copy()).float()).unsqueeze(0)
             del s
             f = q.future(ms)
-            a = q.sample_action(f, epsilon)      
-            s_prime, r, done, info = env.step(a)
+            orsm_idx = random.randint(0, n_pop-1)
+            a = q.sample_action(f, epsilon, orsm_idx)  
             env.render()
+            s_prime, r, done, info = env.step(a)
             ms_prime = m(torch.tensor(s_prime.copy(), dtype=torch.float)).unsqueeze(0)
             c = F.mse_loss(f.gather(1, torch.tensor([a], dtype=torch.long).view(1, 1).unsqueeze(-1).expand(-1, -1, 4)), 
                 ms_prime)
+            q.population[orsm_idx].fitness = c.item()
+            q.evolve()
             print(c)
-            r += c
+            r = c
             done_mask = 0.0 if done else 1.0
             # print(ms.shape, ms_prime.shape)
             memory.put((ms,a,r/100.0,ms_prime, done_mask))
             s = s_prime
-            r -= c
+            # r -= c
             score += r.item()
+            if plot:
+                curiosities.append(c.item())
+                print(curiosities)
+                plt.clf()
+                plt.ylim(0.0, 1000.0)
+                plt.plot(curiosities)
+                plt.savefig('mario_plot.png')
             if done:
                 break
             
