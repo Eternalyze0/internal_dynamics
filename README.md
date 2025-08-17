@@ -1,6 +1,8 @@
 # Internal Dynamics
 
-A neural network with an internal dynamics predictor. The agent first predicts all possible 1-step ahead futures based on all possible actions, then makes a decision based on these futures. The futures network is also trained for consistency with the actual future. The future network loss is added to the reward (curiosity). Baseline DQN code is from https://github.com/seungeunrho/minimalRL. Most relevant paper is https://arxiv.org/abs/1705.05363, which uses an external dynamics predictor. So far, it can beat the first level (1-1) of Super Mario Bros.
+A neural network with an internal dynamics predictor. The agent first predicts all possible 1-step ahead futures based on all possible actions, then makes a decision based on these futures. The futures network is also trained for consistency with the actual future. The future network loss is added to the reward (curiosity). Baseline DQN code is from https://github.com/seungeunrho/minimalRL. Most relevant paper is https://arxiv.org/abs/1705.05363, which uses an external dynamics predictor. 
+
+So far, it can beat the first level (1-1) of Super Mario Bros:
 
 ![mario_win_1-1_clip](https://github.com/user-attachments/assets/11fae889-bf62-4bd9-ab42-5351b9cba6b0)
 
