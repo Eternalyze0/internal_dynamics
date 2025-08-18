@@ -17,5 +17,5 @@ Curiosity spikes during movement:
 ## Usage
 
 ```
-python3.10 interal_dynamics.py
+python3.10 mario.py
 ```
