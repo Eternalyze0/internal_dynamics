@@ -13,3 +13,9 @@ But the second level (1-2) is much more challenging:
 Curiosity spikes during movement:
 
 ![mario_graph](https://github.com/user-attachments/assets/b3eaf828-4a04-4047-92ef-fa656602e2f0)
+
+## Usage
+
+```
+python3.10 interal_dynamics.py
+```
