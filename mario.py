@@ -58,7 +58,7 @@ class Q(nn.Module):
         x = self.fcxx(x) * self.atn(x) + self.fcxy(x) * self.atn(y) + self.fcxz(x) * self.atn(z) + \
             self.fcyx(y) * self.atn(x) + self.fcyy(y) * self.atn(y) + self.fcyz(y) * self.atn(z) + \
             self.fczx(z) * self.atn(x) + self.fczy(z) * self.atn(y) + self.fczz(z) * self.atn(z) 
-        x = F.leaky_relu(self.fc2(x))
+        x = self.fc2(x) * self.atn(x)
         x = self.fc3(x)
         return x
 class Compressor(nn.Module):
@@ -85,8 +85,8 @@ class Future(nn.Module):
         self.fc3 = nn.Linear(80, 80)
         self.atn = nn.Softmax(dim=1)
     def forward(self, x):
-        x = x + F.leaky_relu(self.fc1(x) * self.atn(x))
-        x = x + F.leaky_relu(self.fc2(x) * self.atn(x))
+        x = x + self.fc1(x) * self.atn(x)
+        x = x + self.fc2(x) * self.atn(x)
         x = x + self.fc3(x) * self.atn(x)
         return x
 class ActionPredictor(nn.Module):
@@ -106,23 +106,28 @@ def train(q, d, o, f, c, ap):
     s, a, r, s_tp1, dm = d.sample(bs)
     cs, cs_tp1 = c(s), c(s_tp1)
     fcs = f(cs)
-    ffcs = f(fcs)
-    q_p = q(s, fcs, ffcs)
+    f5fcs = f(f(f(f(f(fcs)))))
+    q_p = q(s, fcs, f5fcs)
     q_a = q_p.gather(1, a)
     fcs_tp1 = f(cs_tp1)
-    ffcs_tp1 = f(fcs_tp1)
-    q_t = r + g * q(s_tp1, fcs_tp1, ffcs_tp1).max(1)[0] * dm
+    f5fcs_tp1 = f(f(f(f(f(fcs_tp1)))))
+    q_t = r + g * q(s_tp1, fcs_tp1, f5fcs_tp1).max(1)[0] * dm
     q_t = q_t.unsqueeze(1)
     l1 = F.smooth_l1_loss(q_a, q_t)
     l2 = F.smooth_l1_loss(fcs, cs_tp1)
     st = torch.concat([cs, cs_tp1], dim=1)
     a_p = ap(st)
-    l3 = F.smooth_l1_loss(a_p, F.one_hot(a.long(), num_classes=7).squeeze(1).float())
+    # l3 = F.smooth_l1_loss(a_p, F.one_hot(a.long(), num_classes=7).squeeze(1).float())
+    l3 = F.cross_entropy(a_p, F.one_hot(a.long(), num_classes=7).squeeze(1).float())
     l = l1 + l2 + l3
     o.zero_grad()
     l.backward()
     o.step()
     # print('grads:', q.fc3.weight.grad[0][0].item(), f.fc3.weight.grad[0][0].item(), c.fc1.weight.grad[0][0].item(), ap.fc3.weight.grad[0][0].item())
+    if plot:
+        l1s.append(l1.detach())
+        l2s.append(l2.detach())
+        l3s.append(l3.detach())
 def n_p(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 def preprocess(state):
@@ -142,6 +147,8 @@ if __name__ == '__main__':
     print('f:', n_p(f))
     print('c:', n_p(c))
     print('ap:', n_p(ap))
+    plot = False
+    l1s, l2s, l3s, curs = [], [], [], []
     if len(sys.argv)>1 and 'new' in sys.argv[1]:
         pass
     else:
@@ -160,8 +167,8 @@ if __name__ == '__main__':
             state = env.reset()
             state = preprocess(state)
         future = f(c(state))
-        future_future = f(future)
-        action = q(state, future, future_future).argmax(dim=1)
+        future5_future = f(f(f(f(f(future)))))
+        action = q(state, future, future5_future).argmax(dim=1)
         state_tp1, reward, done, info = env.step(action.item())
         state_tp1 = preprocess(state_tp1)
         with torch.no_grad():
@@ -183,4 +190,15 @@ if __name__ == '__main__':
             torch.save(f.state_dict(), 'mario_f.pth')
             torch.save(c.state_dict(), 'mario_c.pth')
             torch.save(ap.state_dict(), 'mario_ap.pth')
+        if plot:
+            curs.append(curiosity)
     env.close()
+    if plot:    
+        import matplotlib.pyplot as plt 
+        plt.plot(l1s, label='policy loss')
+        plt.plot(l2s, label='dynamics loss')
+        plt.plot(l3s, label='inverse dynamics loss')
+        plt.plot(curs, label='curiosities/rewards')
+        plt.yscale('log')
+        plt.legend()
+        plt.savefig('mario.png')
