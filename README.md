@@ -14,6 +14,8 @@ Curiosity spikes during movement:
 
 ![mario_graph](https://github.com/user-attachments/assets/b3eaf828-4a04-4047-92ef-fa656602e2f0)
 
+<img width="640" height="480" alt="mario" src="https://github.com/user-attachments/assets/e1fe26a5-9c0f-4438-a82e-e01015efa5ec" />
+
 ## Usage
 
 ```
