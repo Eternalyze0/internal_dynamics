@@ -164,7 +164,7 @@ if __name__ == '__main__':
         ap.load_state_dict(torch.load('mario_ap.pth'))
     bs = 4
     d = D(int(1e4))
-    o = torch.optim.AdamW(chain(q.parameters(), f.parameters(), c.parameters(), ap.parameters()), lr=0.01)
+    o = torch.optim.AdamW(chain(q.parameters(), f.parameters(), c.parameters(), ap.parameters()), lr=0.0005)
     g = 0.98
     done = True
     for step in range(1, int(1e10)):
