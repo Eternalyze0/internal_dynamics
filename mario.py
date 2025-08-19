@@ -122,6 +122,11 @@ def train(q, d, o, f, c, ap):
     l = l1 + l2 + l3
     o.zero_grad()
     l.backward()
+    max_norm = 1.0
+    torch.nn.utils.clip_grad_norm_(q.parameters(), max_norm)
+    torch.nn.utils.clip_grad_norm_(f.parameters(), max_norm)
+    torch.nn.utils.clip_grad_norm_(c.parameters(), max_norm)
+    torch.nn.utils.clip_grad_norm_(ap.parameters(), max_norm)
     o.step()
     # print('grads:', q.fc3.weight.grad[0][0].item(), f.fc3.weight.grad[0][0].item(), c.fc1.weight.grad[0][0].item(), ap.fc3.weight.grad[0][0].item())
     if plot:
